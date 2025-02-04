@@ -13,9 +13,10 @@ entity top_level is
         rst                 : in std_logic;
         echo                : in std_logic;
         botao_calibracao    : in std_logic;
-        flag                : out std_logic;
+        status_calibracao   : out std_logic;
         trigger             : out std_logic;
-        pwm_motor           : out std_logic;
+        ENA                 : out std_logic;
+        IN1                 : out std_logic;
         AN                  : out std_logic_vector(3 downto 0);
         display             : out std_logic_vector(6 downto 0)
     );
@@ -37,7 +38,7 @@ begin
             reset    => rst
         );
 
-    distancia_calc_inst: entity work.Distancia_Calc
+    distance_calc_inst: entity work.Distancia_Calc
         port map(
             clk     => clk,
             reset   => rst,
@@ -56,19 +57,25 @@ begin
             digit_1 => digit_1,
             digit_2 => digit_2,
             digit_3 => digit_3,
-            AN => AN,
+            AN      => AN,
             display => display
         );
 
-    controle_inst: entity work.controle
+    controle_inst: entity work.Controle
+        generic map(
+            setpoint    => 50, -- Valor desejado de 0% a 100%
+            kp          => 1,        -- Ganho proporcional
+            ki          => 0,        -- Ganho integral
+            kd          => 0         -- Ganho derivativo
+        )
         port map(
-            clk => clk,                
-            reset => rst,          
-            setpoint => 50,    
-            feedback => distancia,
-            botao_calibracao => botao_calibracao,
-            flag => flag,  
-            pwm_output => pwm_motor                
+            clk     => clk,
+            rst     => rst,
+            distancia           => distancia, -- Valor medido
+            botao_calibracao    => botao_calibracao,
+            status_calibracao   => status_calibracao,
+            ENA     => ENA,
+            IN1     => IN1
         );
 
 end architecture;
