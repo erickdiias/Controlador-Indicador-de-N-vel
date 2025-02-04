@@ -1,43 +1,47 @@
-library IEEE;
-use IEEE.STD_LOGIC_1164.ALL;
-use IEEE.NUMERIC_STD.ALL;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 
-entity controle is
+entity Controle is
+    generic(
+        setpoint            : integer range 0 to 100 := 50;
+        Kp                  : integer := 0;
+        Ki                  : integer := 0;
+        Kd                  : integer := 0
+    );
     Port (
-        clk              : in  STD_LOGIC;
-        reset            : in  STD_LOGIC;
-        setpoint         : in  INTEGER RANGE 0 TO 100;
-        feedback         : in  STD_LOGIC_VECTOR(31 downto 0);
-        botao_calibracao : in  STD_LOGIC;
-        flag             : out std_logic;
-        pwm_output       : out STD_LOGIC
+        clk                 : in  std_logic;
+        rst                 : in  std_logic;
+        distancia           : in  STD_LOGIC_VECTOR(31 downto 0);
+        botao_calibracao    : in  std_logic;
+        status_calibracao   : out std_logic;
+        ENA                 : out std_logic;   -- PWM para motor
+        IN1                 : out std_logic    -- Direção do motor
     );
 end entity;
 
-architecture Behavioral of controle is
-    signal error         : signed(31 downto 0);
-    signal integral      : INTEGER := 0;
-    signal derivative    : signed(31 downto 0);
-    signal last_error    : signed(31 downto 0) := (others => '0');
-    signal pid_output    : INTEGER := 0;
-    signal pwm_counter   : INTEGER := 0;
-    constant PWM_PERIOD  : INTEGER := 1000;
-    constant Kp          : INTEGER := 0;
-    constant Ki          : INTEGER := 200;
-    constant Kd          : INTEGER := 0;
+architecture main of Controle is
+    signal erro             : signed(31 downto 0) := (others => '0');
+    signal erro_anterior    : signed(31 downto 0) := (others => '0');
+    signal integral         : signed(31 downto 0) := (others => '0');
+    signal derivada         : signed(31 downto 0) := (others => '0');
 
-    signal calibracao_ok : std_logic := '0';
-    signal nivel_atual   : integer := 0;
-    signal nivel_vazio   : integer := 0;
+    signal calibracao_ok    : std_logic := '0';
 
-    constant NIVEL_MAX   : integer := 0;
-    constant NIVEL_MIN   : integer := 20;
+    signal output_PID       : integer := 0;
+    signal output_PWM       : integer := 0;
+
+    signal nivel_atual      : integer := 0;
+    signal nivel_vazio      : integer := 0;
+
+    constant NIVEL_MAX      : integer := 100;
+    constant NIVEL_MIN      : integer := 20;
 
     function calibrar_distancia (DISTANCIA: integer) return integer is
     begin
-        if DISTANCIA > NIVEL_MIN then
+        if DISTANCIA >= NIVEL_MIN then
             return 0;
-        elsif DISTANCIA < NIVEL_MAX then
+        elsif DISTANCIA <= NIVEL_MAX then
             return 100;
         else
             return (DISTANCIA * 100) / NIVEL_MIN;
@@ -45,11 +49,11 @@ architecture Behavioral of controle is
     end function;
 begin
 
-    nivel_atual <= calibrar_distancia(to_integer(unsigned(feedback)));
+    nivel_atual <= calibrar_distancia(to_integer(unsigned(distancia)));
 
-    process(clk, reset, botao_calibracao, calibracao_ok)
+    process(clk, rst, calibracao_ok)
     begin
-        if reset = '1' then
+        if rst = '1' then
             calibracao_ok <= '0';
             nivel_vazio <= 0;
         elsif rising_edge(clk) then
@@ -58,62 +62,68 @@ begin
                 calibracao_ok <= '1';
             end if;
         end if;
+
+        status_calibracao <= calibracao_ok;
+
     end process;
     
-    flag <= calibracao_ok;
-    
-    -- PID Control Process
-    process(clk, reset)
+    -- PID Controle Processo
+    process(clk, rst)
     begin
-        if reset = '1' then
-            integral <= 0;
-            last_error <= (others => '0');
+        if rst = '1' then
+            erro <= (others => '0');
+            erro_anterior <= (others => '0');
+            integral <= (others => '0');
+            derivada <= (others => '0');
+            output_PID <= 0;
         elsif rising_edge(clk) then
             if calibracao_ok = '1' then
-                -- Converte o setpoint e calcula o erro
-                error <= to_signed(setpoint, 32) - to_signed(nivel_atual - nivel_vazio, 32);
+                erro <= to_signed(setpoint - (nivel_atual - nivel_vazio), 32);
+                integral <= integral + erro;
+                derivada <= erro - erro_anterior;
+                output_PID <= (to_integer(erro) * Kp) + (to_integer(integral) * Ki) + (to_integer(derivada) * Kd);
 
-                -- Integral calculation com limitação
-                integral <= integral + to_integer(error);
-                if integral > 255 then
-                    integral <= 255;
-                elsif integral < 0 then
-                    integral <= 0;
+                if output_PID < 0 then
+                    output_PWM <= 0;
+                elsif output_PID > 255 then
+                    output_PWM <= 255;
+                else
+                    output_PWM <= output_PID;
                 end if;
 
-                -- Derivative calculation
-                derivative <= error - last_error;
-                last_error <= error;
-
-                -- PID output calculation com limitação
-                pid_output <= (to_integer(error) * Kp) + (integral * Ki) + (to_integer(derivative) * Kd);
-                if pid_output > PWM_PERIOD then
-                    pid_output <= PWM_PERIOD;
-                elsif pid_output < 0 then
-                    pid_output <= 0;
-                end if;
+                erro_anterior <= erro; -- Atualiza erro anterior
             end if;
         end if;
     end process;
 
-    -- PWM Generation Process
-    process(clk, reset)
+    -- Geração do PWM
+    process(clk, rst)
+        variable pwm_counter : integer := 0;
     begin
-        if reset = '1' then
-            pwm_counter <= 0;
-            pwm_output <= '0';
+        if rst = '1' then
+            pwm_counter := 0;
+            ENA <= '0';
         elsif rising_edge(clk) then
-            if pwm_counter < PWM_PERIOD then
-                pwm_counter <= pwm_counter + 1;
+            if pwm_counter < 255 then
+                pwm_counter := pwm_counter + 1;
             else
-                pwm_counter <= 0;
+                pwm_counter := 0;
             end if;
 
-            if pwm_counter < pid_output then
-                pwm_output <= '1';
+            if pwm_counter < output_PWM then
+                ENA <= '1';
             else
-                pwm_output <= '0';
+                ENA <= '0';
             end if;
+        end if;
+    end process;
+
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            IN1 <= '0';
+        elsif rising_edge(clk) then
+            IN1 <= '1';
         end if;
     end process;
 
